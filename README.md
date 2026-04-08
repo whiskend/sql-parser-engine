@@ -21,7 +21,7 @@ flowchart LR
 ## 2. 구조를 어떻게 잡았는가
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["원본 SQL"] --> B["Token"]
     B --> C["AST"]
     C --> D["schema + rows"]
@@ -80,7 +80,7 @@ flowchart LR
 ## 4. 설계 선택 2: 입력 처리 문제와 개선
 
 ```mermaid
-flowchart TD
+flowchart LR
     A["SQL file"] --> B["tokenize_sql"]
     B --> C["parse_next_statement(loop)"]
     C --> D["Statement 1"]
@@ -167,24 +167,7 @@ flowchart LR
     D --> E["저녁 후<br/>발표 준비 + 코드 리딩"]
 ```
 
-```mermaid
-flowchart LR
-    A["1. main.c"] --> B["2. ast.h"]
-    B --> C["3. parser.c"]
-    C --> D["4. executor.c"]
-    D --> E["5. schema.c / storage.c"]
-    E --> F["6. result.c / utils.c"]
-```
-
 - 협업 순서: Top-Down 이해 -> 모듈 경계 확정 -> 병렬 구현 -> Low-level 확인 -> 발표 정리
 - 장점: 구현 속도와 코드 이해를 함께 확보
 
 ## 10. 마무리
-
-```text
-SQL 문자열을 token으로 자르고,
-AST로 구조화하고,
-그 구조를 파일 기반 DB 위에서 실행해 보는 프로젝트
-```
-
-- 핵심 메시지: 구현보다 판단 과정과 설명 가능성
