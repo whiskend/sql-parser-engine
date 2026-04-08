@@ -1,1 +1,1 @@
-INSERT INTO users VALUES (1, 'Alice', 20);
+INSERT INTO users VALUES (1, 'JunHee', 26);
