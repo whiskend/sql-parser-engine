@@ -1,8 +1,5 @@
 # SQL Parser Engine
 
-- 한 줄: `SQL file -> Token -> AST -> Execute -> File DB -> Output`
-- 발표 키워드: 문제 해석, 설계 선택, 협업 방식, 설명 가능성
-
 ## 1. 도입
 
 ```mermaid
@@ -90,13 +87,6 @@ flowchart TD
     C --> E["Statement 2"]
     D --> F["execute_statement"]
     E --> F
-```
-
-```mermaid
-flowchart LR
-    A["row 읽기"] --> B["WHERE 필터"]
-    B --> C["projection"]
-    C --> D["출력"]
 ```
 
 - 문제 1: SQL 파일이 두 줄 이상이면 초기 구현이 깨짐
