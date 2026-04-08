@@ -18,24 +18,6 @@ static void set_error(char *errbuf, size_t errbuf_size, const char *fmt, ...) {
     va_end(args);
 }
 
-static char *duplicate_string(const char *src) {
-    size_t len;
-    char *copy;
-
-    if (src == NULL) {
-        return NULL;
-    }
-
-    len = strlen(src) + 1U;
-    copy = (char *)malloc(len);
-    if (copy == NULL) {
-        return NULL;
-    }
-
-    memcpy(copy, src, len);
-    return copy;
-}
-
 static char *build_table_path(const char *db_dir, const char *table_name, const char *suffix) {
     size_t db_len;
     size_t table_len;
@@ -590,5 +572,4 @@ void free_rows(Row *rows, size_t row_count) {
 
     free(rows);
 }
-
 
