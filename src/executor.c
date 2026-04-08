@@ -18,12 +18,16 @@ static int execute_select(const char *db_dir, const SelectStatement *stmt,
 static int build_insert_row(const TableSchema *schema, const InsertStatement *stmt,
                             Row *out_row,
                             char *errbuf, size_t errbuf_size);
+static int ensure_unique_id_value(const char *db_dir, const TableSchema *schema,
+                                  const char *table_name, const Row *row,
+                                  char *errbuf, size_t errbuf_size);
 static int validate_select_columns(const TableSchema *schema, const SelectStatement *stmt,
                                    char *errbuf, size_t errbuf_size);
 static int project_rows_for_select(const TableSchema *schema, const SelectStatement *stmt,
                                    const Row *all_rows, size_t all_row_count,
                                    QueryResult *out_result,
                                    char *errbuf, size_t errbuf_size);
+static int row_matches_where_clause(const SelectStatement *stmt, int where_index, const Row *row);
 static char *dup_string(const char *src);
 
 static void set_error(char *errbuf, size_t errbuf_size, const char *fmt, ...)
@@ -185,6 +189,13 @@ static int execute_insert(const char *db_dir, const InsertStatement *stmt,
         return status;
     }
 
+    status = ensure_unique_id_value(db_dir, &schema, stmt->table_name, &row, errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        free_row_contents(&row);
+        free_table_schema(&schema);
+        return status;
+    }
+
     status = ensure_table_data_file(db_dir, stmt->table_name, errbuf, errbuf_size);
     if (status != STATUS_OK) {
         free_row_contents(&row);
@@ -240,7 +251,7 @@ static int execute_select(const char *db_dir, const SelectStatement *stmt,
     }
 
     out_result->type = RESULT_SELECT;
-    out_result->affected_rows = all_row_count;
+    out_result->affected_rows = out_result->query_result.row_count;
     return STATUS_OK;
 }
 
@@ -336,6 +347,57 @@ static int build_insert_row(const TableSchema *schema, const InsertStatement *st
     return STATUS_OK;
 }
 
+static int ensure_unique_id_value(const char *db_dir, const TableSchema *schema,
+                                  const char *table_name, const Row *row,
+                                  char *errbuf, size_t errbuf_size)
+{
+    Row *existing_rows = NULL;
+    size_t existing_row_count = 0;
+    size_t row_index;
+    int id_index;
+    int status;
+
+    if (db_dir == NULL || schema == NULL || table_name == NULL || row == NULL) {
+        set_error(errbuf, errbuf_size, "EXEC ERROR: invalid id validation arguments");
+        return STATUS_EXEC_ERROR;
+    }
+
+    id_index = schema_find_column_index(schema, "id");
+    if (id_index < 0) {
+        return STATUS_OK;
+    }
+
+    if ((size_t)id_index >= row->value_count || row->values[id_index] == NULL || row->values[id_index][0] == '\0') {
+        set_error(errbuf, errbuf_size, "EXEC ERROR: column 'id' requires a non-empty value");
+        return STATUS_EXEC_ERROR;
+    }
+
+    status = read_all_rows_from_table(db_dir, table_name, schema->column_count,
+                                      &existing_rows, &existing_row_count,
+                                      errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        return translate_module_status(status, STATUS_STORAGE_ERROR, "STORAGE ERROR", errbuf, errbuf_size);
+    }
+
+    for (row_index = 0; row_index < existing_row_count; ++row_index) {
+        const char *existing_id = "";
+
+        if ((size_t)id_index < existing_rows[row_index].value_count &&
+            existing_rows[row_index].values[id_index] != NULL) {
+            existing_id = existing_rows[row_index].values[id_index];
+        }
+
+        if (strcmp(existing_id, row->values[id_index]) == 0) {
+            set_error(errbuf, errbuf_size, "EXEC ERROR: duplicate id '%s'", row->values[id_index]);
+            free_rows(existing_rows, existing_row_count);
+            return STATUS_EXEC_ERROR;
+        }
+    }
+
+    free_rows(existing_rows, existing_row_count);
+    return STATUS_OK;
+}
+
 static int validate_select_columns(const TableSchema *schema, const SelectStatement *stmt,
                                    char *errbuf, size_t errbuf_size)
 {
@@ -346,23 +408,47 @@ static int validate_select_columns(const TableSchema *schema, const SelectStatem
         return STATUS_EXEC_ERROR;
     }
 
-    if (stmt->select_all) {
-        return STATUS_OK;
-    }
-
-    if (stmt->column_count == 0) {
+    if (!stmt->select_all && stmt->column_count == 0) {
         set_error(errbuf, errbuf_size, "EXEC ERROR: empty select column list");
         return STATUS_EXEC_ERROR;
     }
 
-    for (i = 0; i < stmt->column_count; ++i) {
-        if (schema_find_column_index(schema, stmt->columns[i]) < 0) {
-            set_error(errbuf, errbuf_size, "EXEC ERROR: unknown column '%s'", stmt->columns[i]);
-            return STATUS_EXEC_ERROR;
+    if (!stmt->select_all) {
+        for (i = 0; i < stmt->column_count; ++i) {
+            if (schema_find_column_index(schema, stmt->columns[i]) < 0) {
+                set_error(errbuf, errbuf_size, "EXEC ERROR: unknown column '%s'", stmt->columns[i]);
+                return STATUS_EXEC_ERROR;
+            }
         }
     }
 
+    if (stmt->where_clause.has_condition &&
+        schema_find_column_index(schema, stmt->where_clause.column_name) < 0) {
+        set_error(errbuf, errbuf_size, "EXEC ERROR: unknown column '%s'", stmt->where_clause.column_name);
+        return STATUS_EXEC_ERROR;
+    }
+
     return STATUS_OK;
+}
+
+static int row_matches_where_clause(const SelectStatement *stmt, int where_index, const Row *row)
+{
+    const char *current_value;
+
+    if (stmt == NULL || row == NULL) {
+        return 0;
+    }
+
+    if (!stmt->where_clause.has_condition) {
+        return 1;
+    }
+
+    if (where_index < 0 || (size_t)where_index >= row->value_count) {
+        return 0;
+    }
+
+    current_value = row->values[where_index] == NULL ? "" : row->values[where_index];
+    return strcmp(current_value, stmt->where_clause.value.text) == 0;
 }
 
 static int project_rows_for_select(const TableSchema *schema, const SelectStatement *stmt,
@@ -373,7 +459,9 @@ static int project_rows_for_select(const TableSchema *schema, const SelectStatem
     size_t i;
     size_t row_index;
     size_t selected_count;
+    size_t matched_row_count;
     int *selected_indexes = NULL;
+    int where_index = -1;
 
     if (schema == NULL || stmt == NULL || out_result == NULL) {
         set_error(errbuf, errbuf_size, "EXEC ERROR: invalid projection arguments");
@@ -416,25 +504,39 @@ static int project_rows_for_select(const TableSchema *schema, const SelectStatem
     }
     out_result->column_count = selected_count;
 
-    out_result->rows = (Row *)calloc(all_row_count, sizeof(Row));
-    if (all_row_count > 0 && out_result->rows == NULL) {
-        free(selected_indexes);
-        free_query_result_contents(out_result);
-        set_error(errbuf, errbuf_size, "EXEC ERROR: out of memory");
-        return STATUS_EXEC_ERROR;
+    if (stmt->where_clause.has_condition) {
+        where_index = schema_find_column_index(schema, stmt->where_clause.column_name);
     }
-    out_result->row_count = all_row_count;
 
-    for (row_index = 0; row_index < all_row_count; ++row_index) {
-        out_result->rows[row_index].values = (char **)calloc(selected_count, sizeof(char *));
-        if (selected_count > 0 && out_result->rows[row_index].values == NULL) {
+    if (all_row_count > 0) {
+        out_result->rows = (Row *)calloc(all_row_count, sizeof(Row));
+        if (out_result->rows == NULL) {
             free(selected_indexes);
             free_query_result_contents(out_result);
             set_error(errbuf, errbuf_size, "EXEC ERROR: out of memory");
             return STATUS_EXEC_ERROR;
         }
+    }
 
-        out_result->rows[row_index].value_count = selected_count;
+    matched_row_count = 0;
+    for (row_index = 0; row_index < all_row_count; ++row_index) {
+        size_t output_row_index;
+
+        if (!row_matches_where_clause(stmt, where_index, &all_rows[row_index])) {
+            continue;
+        }
+
+        output_row_index = matched_row_count;
+        out_result->rows[output_row_index].values = (char **)calloc(selected_count, sizeof(char *));
+        if (selected_count > 0 && out_result->rows[output_row_index].values == NULL) {
+            free(selected_indexes);
+            out_result->row_count = matched_row_count;
+            free_query_result_contents(out_result);
+            set_error(errbuf, errbuf_size, "EXEC ERROR: out of memory");
+            return STATUS_EXEC_ERROR;
+        }
+
+        out_result->rows[output_row_index].value_count = selected_count;
         for (i = 0; i < selected_count; ++i) {
             const char *value = "";
 
@@ -443,16 +545,20 @@ static int project_rows_for_select(const TableSchema *schema, const SelectStatem
                 value = all_rows[row_index].values[selected_indexes[i]];
             }
 
-            out_result->rows[row_index].values[i] = dup_string(value);
-            if (out_result->rows[row_index].values[i] == NULL) {
+            out_result->rows[output_row_index].values[i] = dup_string(value);
+            if (out_result->rows[output_row_index].values[i] == NULL) {
                 free(selected_indexes);
+                out_result->row_count = matched_row_count + 1U;
                 free_query_result_contents(out_result);
                 set_error(errbuf, errbuf_size, "EXEC ERROR: out of memory");
                 return STATUS_EXEC_ERROR;
             }
         }
+
+        matched_row_count += 1U;
     }
 
+    out_result->row_count = matched_row_count;
     free(selected_indexes);
     return STATUS_OK;
 }

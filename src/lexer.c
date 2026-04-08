@@ -51,6 +51,9 @@ static TokenType keyword_type(const char *text) {
     if (strings_equal_ignore_case(text, "FROM")) {
         return TOKEN_FROM;
     }
+    if (strings_equal_ignore_case(text, "WHERE")) {
+        return TOKEN_WHERE;
+    }
     return TOKEN_IDENTIFIER;
 }
 
@@ -212,6 +215,9 @@ static int tokenize_symbol(char ch, TokenArray *tokens, char *errbuf, size_t err
         case '*':
             type = TOKEN_STAR;
             break;
+        case '=':
+            type = TOKEN_EQUAL;
+            break;
         default:
             set_error(errbuf, errbuf_size, "LEX ERROR: invalid character");
             return STATUS_LEX_ERROR;
@@ -318,6 +324,10 @@ const char *token_type_name(TokenType type) {
             return "TOKEN_SELECT";
         case TOKEN_FROM:
             return "TOKEN_FROM";
+        case TOKEN_WHERE:
+            return "TOKEN_WHERE";
+        case TOKEN_EQUAL:
+            return "TOKEN_EQUAL";
         default:
             return "TOKEN_UNKNOWN";
     }

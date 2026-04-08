@@ -22,10 +22,17 @@ typedef struct {
 } InsertStatement;
 
 typedef struct {
+    int has_condition;
+    char *column_name;
+    LiteralValue value;
+} WhereClause;
+
+typedef struct {
     char *table_name;
     int select_all;
     char **columns;
     size_t column_count;
+    WhereClause where_clause;
 } SelectStatement;
 
 typedef enum {

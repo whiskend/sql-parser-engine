@@ -235,7 +235,61 @@ static void test_read_empty_data_file(void) {
     ASSERT_TRUE(row_count == 0U);
 }
 
-static void test_malformed_row_column_count_error(void) {
+static void test_short_row_is_padded_for_new_schema_column(void) {
+    FILE *data_file;
+    Row *rows = NULL;
+    size_t row_count = 0U;
+    char errbuf[256] = {0};
+
+    prepare_test_db();
+
+    data_file = fopen("tests/tmp_storage_db/users.data", "w");
+    if (data_file == NULL) {
+        fprintf(stderr, "Failed to create data file: %s\n", strerror(errno));
+        exit(1);
+    }
+
+    fputs("1|Alice\n", data_file);
+    fclose(data_file);
+
+    ASSERT_TRUE(read_all_rows_from_table("tests/tmp_storage_db", "users", 3U, &rows, &row_count, errbuf, sizeof(errbuf)) == 0);
+    ASSERT_TRUE(row_count == 1U);
+    ASSERT_TRUE(rows[0].value_count == 3U);
+    ASSERT_STREQ("1", rows[0].values[0]);
+    ASSERT_STREQ("Alice", rows[0].values[1]);
+    ASSERT_STREQ("", rows[0].values[2]);
+
+    free_rows(rows, row_count);
+}
+
+static void test_long_row_is_truncated_for_removed_schema_column(void) {
+    FILE *data_file;
+    Row *rows = NULL;
+    size_t row_count = 0U;
+    char errbuf[256] = {0};
+
+    prepare_test_db();
+
+    data_file = fopen("tests/tmp_storage_db/users.data", "w");
+    if (data_file == NULL) {
+        fprintf(stderr, "Failed to create data file: %s\n", strerror(errno));
+        exit(1);
+    }
+
+    fputs("1|Alice|20|Seoul\n", data_file);
+    fclose(data_file);
+
+    ASSERT_TRUE(read_all_rows_from_table("tests/tmp_storage_db", "users", 3U, &rows, &row_count, errbuf, sizeof(errbuf)) == 0);
+    ASSERT_TRUE(row_count == 1U);
+    ASSERT_TRUE(rows[0].value_count == 3U);
+    ASSERT_STREQ("1", rows[0].values[0]);
+    ASSERT_STREQ("Alice", rows[0].values[1]);
+    ASSERT_STREQ("20", rows[0].values[2]);
+
+    free_rows(rows, row_count);
+}
+
+static void test_malformed_escape_row_still_errors(void) {
     FILE *data_file;
     Row *rows = NULL;
     size_t row_count = 0U;
@@ -249,11 +303,11 @@ static void test_malformed_row_column_count_error(void) {
         exit(1);
     }
 
-    fputs("1|Alice\n", data_file);
+    fputs("1|Ali\\qce|20\n", data_file);
     fclose(data_file);
 
     ASSERT_TRUE(read_all_rows_from_table("tests/tmp_storage_db", "users", 3U, &rows, &row_count, errbuf, sizeof(errbuf)) != 0);
-    ASSERT_TRUE(strstr(errbuf, "expected 3 columns but found 2") != NULL);
+    ASSERT_TRUE(strstr(errbuf, "malformed row") != NULL);
     ASSERT_TRUE(rows == NULL);
     ASSERT_TRUE(row_count == 0U);
 }
@@ -265,7 +319,9 @@ int main(void) {
     test_read_rows_round_trip_escape_sequences();
     test_read_missing_data_file_as_empty_table();
     test_read_empty_data_file();
-    test_malformed_row_column_count_error();
+    test_short_row_is_padded_for_new_schema_column();
+    test_long_row_is_truncated_for_removed_schema_column();
+    test_malformed_escape_row_still_errors();
 
     cleanup_test_db();
 
@@ -276,6 +332,3 @@ int main(void) {
     printf("test_storage: ok\n");
     return 0;
 }
-
-
-

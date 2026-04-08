@@ -24,6 +24,8 @@ int main(int argc, char **argv)
     Statement stmt = {0};
     ExecResult result = {0};
     char errbuf[256] = {0};
+    size_t cursor = 0;
+    size_t executed_statement_count = 0;
     int status;
 
     status = parse_cli_args(argc, argv, &options);
@@ -58,30 +60,48 @@ int main(int argc, char **argv)
         return status;
     }
 
-    status = parse_statement(&tokens, &stmt, errbuf, sizeof(errbuf));
-    if (status != STATUS_OK) {
-        print_error_message(errbuf);
-        free(sql_text);
-        free_token_array(&tokens);
-        free_statement(&stmt);
-        return status;
+    while (cursor < tokens.count && tokens.items[cursor].type == TOKEN_SEMICOLON) {
+        ++cursor;
     }
 
-    status = execute_statement(options.db_dir, &stmt, &result, errbuf, sizeof(errbuf));
-    if (status != STATUS_OK) {
-        print_error_message(errbuf);
-        free(sql_text);
-        free_token_array(&tokens);
-        free_statement(&stmt);
+    while (cursor < tokens.count && tokens.items[cursor].type != TOKEN_EOF) {
+        status = parse_next_statement(&tokens, &cursor, &stmt, errbuf, sizeof(errbuf));
+        if (status != STATUS_OK) {
+            print_error_message(errbuf);
+            free(sql_text);
+            free_token_array(&tokens);
+            free_statement(&stmt);
+            return status;
+        }
+
+        status = execute_statement(options.db_dir, &stmt, &result, errbuf, sizeof(errbuf));
+        if (status != STATUS_OK) {
+            print_error_message(errbuf);
+            free(sql_text);
+            free_token_array(&tokens);
+            free_statement(&stmt);
+            free_exec_result(&result);
+            return status;
+        }
+
+        print_exec_result(&result);
+        executed_statement_count += 1;
+
         free_exec_result(&result);
-        return status;
+        free_statement(&stmt);
+
+        while (cursor < tokens.count && tokens.items[cursor].type == TOKEN_SEMICOLON) {
+            ++cursor;
+        }
     }
 
-    print_exec_result(&result);
-
-    free_exec_result(&result);
-    free_statement(&stmt);
     free_token_array(&tokens);
     free(sql_text);
+
+    if (executed_statement_count == 0U) {
+        fprintf(stderr, "PARSE ERROR: no executable SQL statement found\n");
+        return STATUS_PARSE_ERROR;
+    }
+
     return STATUS_OK;
 }

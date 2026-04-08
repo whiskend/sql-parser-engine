@@ -71,14 +71,12 @@ static int parser_match(Parser *parser, TokenType type) {
     return 1;
 }
 
-static int parser_expect(Parser *parser, TokenType type, char *errbuf, size_t errbuf_size) {
-    if (parser_match(parser, type)) {
-        return STATUS_OK;
+static void parser_skip_semicolons(Parser *parser) {
+    while (parser_match(parser, TOKEN_SEMICOLON)) {
+        /* empty statement separators are ignored */
     }
-
-    set_error(errbuf, errbuf_size, "PARSE ERROR: unexpected token");
-    return STATUS_PARSE_ERROR;
 }
+
 
 static int parser_expect_with_message(Parser *parser, TokenType type, const char *message, char *errbuf, size_t errbuf_size) {
     if (parser_match(parser, type)) {
@@ -253,6 +251,37 @@ static int parse_literal_list(Parser *parser, LiteralValue **out_items, size_t *
     return STATUS_OK;
 }
 
+static int parse_where_clause(Parser *parser, WhereClause *out_clause, char *errbuf, size_t errbuf_size) {
+    int status;
+
+    memset(out_clause, 0, sizeof(*out_clause));
+
+    if (!parser_match(parser, TOKEN_WHERE)) {
+        return STATUS_OK;
+    }
+
+    out_clause->has_condition = 1;
+
+    status = parse_identifier(parser, &out_clause->column_name, errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        return status;
+    }
+
+    status = parser_expect_with_message(parser, TOKEN_EQUAL,
+                                        "PARSE ERROR: expected '=' in WHERE clause",
+                                        errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        return status;
+    }
+
+    status = parse_literal(parser, &out_clause->value, errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        return status;
+    }
+
+    return STATUS_OK;
+}
+
 static int parse_insert(Parser *parser, Statement *out_stmt, char *errbuf, size_t errbuf_size) {
     InsertStatement *stmt = &out_stmt->insert_stmt;
     int status;
@@ -338,16 +367,28 @@ static int parse_select(Parser *parser, Statement *out_stmt, char *errbuf, size_
         return status;
     }
 
+    status = parse_where_clause(parser, &stmt->where_clause, errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        free_statement(out_stmt);
+        return status;
+    }
+
     out_stmt->type = STMT_SELECT;
     return STATUS_OK;
 }
 
-int parse_statement(const TokenArray *tokens, Statement *out_stmt, char *errbuf, size_t errbuf_size) {
+int parse_next_statement(const TokenArray *tokens, size_t *cursor,
+                         Statement *out_stmt, char *errbuf, size_t errbuf_size) {
     Parser parser;
     int status;
 
-    if (tokens == NULL || out_stmt == NULL || tokens->count == 0 || tokens->items == NULL) {
+    if (tokens == NULL || cursor == NULL || out_stmt == NULL || tokens->count == 0 || tokens->items == NULL) {
         set_error(errbuf, errbuf_size, "PARSE ERROR: invalid token stream");
+        return STATUS_PARSE_ERROR;
+    }
+
+    if (*cursor >= tokens->count) {
+        set_error(errbuf, errbuf_size, "PARSE ERROR: parser cursor out of range");
         return STATUS_PARSE_ERROR;
     }
 
@@ -357,7 +398,14 @@ int parse_statement(const TokenArray *tokens, Statement *out_stmt, char *errbuf,
 
     memset(out_stmt, 0, sizeof(*out_stmt));
     parser.tokens = tokens;
-    parser.current = 0;
+    parser.current = *cursor;
+    parser_skip_semicolons(&parser);
+
+    if (parser_peek(&parser)->type == TOKEN_EOF) {
+        set_error(errbuf, errbuf_size, "PARSE ERROR: expected INSERT or SELECT");
+        *cursor = parser.current;
+        return STATUS_PARSE_ERROR;
+    }
 
     if (parser_match(&parser, TOKEN_INSERT)) {
         out_stmt->type = STMT_INSERT;
@@ -375,10 +423,27 @@ int parse_statement(const TokenArray *tokens, Statement *out_stmt, char *errbuf,
     }
 
     if (parser_match(&parser, TOKEN_SEMICOLON)) {
-        /* optional */
+        /* statement terminator is optional */
     }
 
-    if (parser_expect(&parser, TOKEN_EOF, errbuf, errbuf_size) != STATUS_OK) {
+    *cursor = parser.current;
+    return STATUS_OK;
+}
+
+int parse_statement(const TokenArray *tokens, Statement *out_stmt, char *errbuf, size_t errbuf_size) {
+    size_t cursor = 0;
+    int status;
+
+    status = parse_next_statement(tokens, &cursor, out_stmt, errbuf, errbuf_size);
+    if (status != STATUS_OK) {
+        return status;
+    }
+
+    while (cursor < tokens->count && tokens->items[cursor].type == TOKEN_SEMICOLON) {
+        ++cursor;
+    }
+
+    if (cursor >= tokens->count || tokens->items[cursor].type != TOKEN_EOF) {
         free_statement(out_stmt);
         set_error(errbuf, errbuf_size, "PARSE ERROR: unexpected trailing tokens");
         return STATUS_PARSE_ERROR;
@@ -404,9 +469,16 @@ void free_statement(Statement *stmt) {
     } else if (stmt->type == STMT_SELECT) {
         free(stmt->select_stmt.table_name);
         free_string_list(stmt->select_stmt.columns, stmt->select_stmt.column_count);
+        free(stmt->select_stmt.where_clause.column_name);
+        free(stmt->select_stmt.where_clause.value.text);
         stmt->select_stmt.table_name = NULL;
         stmt->select_stmt.columns = NULL;
         stmt->select_stmt.column_count = 0;
         stmt->select_stmt.select_all = 0;
+        stmt->select_stmt.where_clause.has_condition = 0;
+        stmt->select_stmt.where_clause.column_name = NULL;
+        stmt->select_stmt.where_clause.value.type = VALUE_STRING;
+        stmt->select_stmt.where_clause.value.text = NULL;
     }
 }
+

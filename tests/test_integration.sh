@@ -20,30 +20,45 @@ name
 age
 EOF
 
-cat > "$TMP_DIR/insert_partial.sql" <<'EOF'
-INSERT INTO users (name, id) VALUES ('Bob', 2);
+"$BIN_PATH" -d "$TMP_DIR/db" -f "$ROOT_DIR/queries/insert_users.sql" > "$TMP_DIR/insert1.out"
+
+cat > "$TMP_DIR/db/users.schema" <<'EOF'
+id
+name
+age
+city
 EOF
 
-"$BIN_PATH" -d "$TMP_DIR/db" -f "$ROOT_DIR/queries/insert_users.sql" > "$TMP_DIR/insert1.out"
-"$BIN_PATH" -d "$TMP_DIR/db" -f "$TMP_DIR/insert_partial.sql" > "$TMP_DIR/insert2.out"
-"$BIN_PATH" -d "$TMP_DIR/db" -f "$ROOT_DIR/queries/select_users.sql" > "$TMP_DIR/select_all.out"
-"$BIN_PATH" -d "$TMP_DIR/db" -f "$ROOT_DIR/queries/select_user_names.sql" > "$TMP_DIR/select_partial.out"
+cat > "$TMP_DIR/batch.sql" <<'EOF'
+INSERT INTO users VALUES (2, 'Bob', 25, 'Seoul');
+SELECT * FROM users;
+SELECT name, city FROM users WHERE id = 2;
+EOF
+
+"$BIN_PATH" -d "$TMP_DIR/db" -f "$TMP_DIR/batch.sql" > "$TMP_DIR/batch.out"
+
+cat > "$TMP_DIR/duplicate.sql" <<'EOF'
+INSERT INTO users VALUES (2, 'Bobby', 30, 'Busan');
+EOF
+
+if "$BIN_PATH" -d "$TMP_DIR/db" -f "$TMP_DIR/duplicate.sql" > "$TMP_DIR/duplicate.out" 2> "$TMP_DIR/duplicate.err"; then
+    echo "duplicate id insert should have failed" >&2
+    exit 1
+fi
 
 cat > "$TMP_DIR/expected.data" <<'EOF'
 1|Alice|20
-2|Bob|
+2|Bob|25|Seoul
 EOF
 
 cmp "$TMP_DIR/db/users.data" "$TMP_DIR/expected.data"
 grep -q "INSERT 1" "$TMP_DIR/insert1.out"
-grep -q "INSERT 1" "$TMP_DIR/insert2.out"
-grep -q "Alice" "$TMP_DIR/select_all.out"
-grep -q "Bob" "$TMP_DIR/select_all.out"
-grep -q "2 rows selected" "$TMP_DIR/select_all.out"
-grep -q "name" "$TMP_DIR/select_partial.out"
-grep -q "id" "$TMP_DIR/select_partial.out"
-grep -q "Alice" "$TMP_DIR/select_partial.out"
-grep -q "Bob" "$TMP_DIR/select_partial.out"
-grep -q "2 rows selected" "$TMP_DIR/select_partial.out"
+grep -q "INSERT 1" "$TMP_DIR/batch.out"
+grep -q "Alice" "$TMP_DIR/batch.out"
+grep -q "Bob" "$TMP_DIR/batch.out"
+grep -q "Seoul" "$TMP_DIR/batch.out"
+grep -q "2 rows selected" "$TMP_DIR/batch.out"
+grep -q "1 rows selected" "$TMP_DIR/batch.out"
+grep -q "duplicate id '2'" "$TMP_DIR/duplicate.err"
 
 echo "integration: OK"

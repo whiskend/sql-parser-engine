@@ -40,7 +40,9 @@ INSERT INTO users VALUES (1, 'Alice', 20);
 INSERT INTO users (id, name, age) VALUES (1, 'Alice', 20);
 INSERT INTO users (name, id) VALUES ('Bob', 2);
 SELECT * FROM users;
-SELECT id, name FROM users;
+SELECT id, name FROM users WHERE id = 1;
+INSERT INTO users VALUES (2, 'Bob', 25);
+SELECT * FROM users WHERE id = 2;
 ```
 
 ### 제외한 기능
@@ -49,8 +51,7 @@ SELECT id, name FROM users;
 * `UPDATE`
 * `DELETE`
 * `JOIN`
-* `WHERE`
-* 여러 SQL 문장 처리
+* 복합 조건 `WHERE` (`AND`, `OR`, 비교 연산자 등)
 * 인덱스
 * 트랜잭션
 
@@ -105,7 +106,7 @@ flowchart TD
     M["main"] --> C1["parse_cli_args"]
     C1 --> U1["read_text_file"]
     U1 --> L1["tokenize_sql"]
-    L1 --> P1["parse_statement"]
+    L1 --> P1["parse_next_statement(loop)"]
     P1 --> E1["execute_statement"]
     E1 --> S1["load_table_schema"]
     E1 --> S2["append_row_to_table"]
@@ -161,6 +162,8 @@ age
 * 필드 구분자는 `|`다.
 * schema 컬럼 순서가 data 저장 순서다.
 * 명시되지 않은 컬럼은 빈 문자열 `""`로 저장한다.
+* 현재 schema보다 저장 row가 짧으면 부족한 컬럼은 빈 문자열로 채운다.
+* 현재 schema보다 저장 row가 길면 초과 컬럼은 잘라낸다.
 * escape 규칙은 `\\`, `\|`, `\n`을 사용한다.
 
 ## 8. INSERT 흐름
@@ -233,7 +236,7 @@ sequenceDiagram
 ### 예시 SQL
 
 ```sql
-SELECT name, id FROM users;
+SELECT name, id FROM users WHERE id = 1;
 ```
 
 ### 내부적으로 일어나는 일
@@ -241,11 +244,12 @@ SELECT name, id FROM users;
 ```mermaid
 flowchart LR
     A["schema<br/>id, name, age"] --> B["data row<br/>1|Alice|20"]
-    B --> C["projection<br/>name, id"]
-    C --> D["출력 row<br/>Alice, 1"]
+    B --> C["WHERE 필터<br/>id = 1"]
+    C --> D["projection<br/>name, id"]
+    D --> E["출력 row<br/>Alice, 1"]
 ```
 
-즉, `SELECT`에서 가장 중요한 포인트는 필요한 컬럼만 잘라내는 projection이다.
+즉, `SELECT`에서 가장 중요한 포인트는 WHERE로 row를 먼저 거르고, 필요한 컬럼만 projection 하는 것이다.
 
 ## 10. AST 구조
 
@@ -270,6 +274,13 @@ classDiagram
         +int select_all
         +char** columns
         +size_t column_count
+        +WhereClause where_clause
+    }
+
+    class WhereClause {
+        +int has_condition
+        +char* column_name
+        +LiteralValue value
     }
 
     class LiteralValue {
@@ -280,6 +291,8 @@ classDiagram
     Statement --> InsertStatement
     Statement --> SelectStatement
     InsertStatement --> LiteralValue
+    SelectStatement --> WhereClause
+    WhereClause --> LiteralValue
 ```
 
 이 구조 덕분에 Executor는 더 이상 "문자열 SQL"을 해석하지 않고, 이미 정리된 명령 구조를 실행하는 데 집중할 수 있다.
@@ -314,6 +327,8 @@ sql-parser-engine/
 │  ├─ insert_users.sql
 │  ├─ select_users.sql
 │  ├─ select_user_names.sql
+│  ├─ select_user_where.sql
+│  ├─ multi_statements.sql
 │  └─ invalid_missing_from.sql
 ├─ src/
 │  ├─ main.c
@@ -352,6 +367,16 @@ make
 ```sh
 ./sql_processor --db ./db --file ./queries/insert_users.sql
 ./sql_processor -d ./db -f ./queries/select_users.sql
+./sql_processor -d ./db -f ./queries/select_user_where.sql
+./sql_processor -d ./db -f ./queries/multi_statements.sql
+```
+
+### Windows 실행 예시
+
+```powershell
+.\sql_processor.exe -d .\db -f .\queries\insert_users.sql
+.\sql_processor.exe -d .\db -f .\queries\select_user_where.sql
+.\sql_processor.exe -d .\db -f .\queries\multi_statements.sql
 ```
 
 ### 도움말
@@ -471,27 +496,30 @@ flowchart LR
 * 존재하지 않는 컬럼
 * `INSERT` 값 개수 불일치
 * schema 파일 비어 있음
-* data row column count mismatch
+* 스키마 컬럼 추가/제거 뒤 기존 row 읽기
 * 부분 컬럼 `INSERT`
+* 중복 `id` 삽입 차단
+* `WHERE` 결과가 0건인 경우
 * `SELECT *`와 partial `SELECT`
 
 ## 18. 한계와 향후 개선점
 
 ### 현재 한계
 
-* 단일 SQL 문장만 처리
-* `WHERE` 미지원
+* `WHERE column = literal`까지만 지원
 * 타입 시스템 단순화
+* `id` 컬럼만 유일성 검사
+* 저장 포맷이 positional 기반이라 컬럼 재정렬까지는 보장하지 않음
 * 인덱스와 트랜잭션 미지원
 * 복잡한 SQL 문법 미지원
 
 ### 향후 개선
 
-* `WHERE column = literal`
-* 여러 SQL 문장 처리
+* `AND`, `OR`, `<`, `>` 같은 확장 WHERE
 * SQL comment 무시
 * 출력 정렬 고도화
 * `NULL` 지원
+* 컬럼 이름 기반 저장 포맷으로 스키마 변경 대응 강화
 
 ## 19. 발표용 한 줄 정리
 
@@ -501,3 +529,4 @@ AST로 구조화하고,
 그 구조를 파일 기반 DB 위에서 실행해
 결과를 보여주는 작은 SQL 처리기다.
 ```
+

@@ -17,7 +17,9 @@ typedef enum {
     TOKEN_INTO,
     TOKEN_VALUES,
     TOKEN_SELECT,
-    TOKEN_FROM
+    TOKEN_FROM,
+    TOKEN_WHERE,
+    TOKEN_EQUAL
 } TokenType;
 
 typedef struct {

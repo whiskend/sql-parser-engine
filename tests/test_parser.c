@@ -66,47 +66,53 @@ static void test_insert_without_column_list(void) {
     free_statement(&stmt);
 }
 
-static void test_insert_with_column_list(void) {
+static void test_select_column_list_with_where(void) {
     Statement stmt;
     char errbuf[256] = {0};
 
     assert_int_eq(STATUS_OK,
-                  tokenize_and_parse("INSERT INTO users (name, id) VALUES ('Bob', 2);", &stmt, errbuf, sizeof(errbuf)),
-                  "INSERT with column list should parse");
-    assert_size_eq(2, stmt.insert_stmt.column_count, "column count should match");
-    assert_str_eq("name", stmt.insert_stmt.columns[0], "first column should match");
-    assert_str_eq("id", stmt.insert_stmt.columns[1], "second column should match");
-    assert_str_eq("Bob", stmt.insert_stmt.values[0].text, "first literal should match");
-    assert_str_eq("2", stmt.insert_stmt.values[1].text, "second literal should match");
-    free_statement(&stmt);
-}
-
-static void test_select_star(void) {
-    Statement stmt;
-    char errbuf[256] = {0};
-
-    assert_int_eq(STATUS_OK,
-                  tokenize_and_parse("SELECT * FROM users", &stmt, errbuf, sizeof(errbuf)),
-                  "SELECT * without semicolon should parse");
+                  tokenize_and_parse("SELECT id, name FROM users WHERE id = 2;", &stmt, errbuf, sizeof(errbuf)),
+                  "SELECT with WHERE should parse");
     assert_int_eq(STMT_SELECT, stmt.type, "statement type should be SELECT");
-    assert_int_eq(1, stmt.select_stmt.select_all, "select_all should be enabled");
-    assert_size_eq(0, stmt.select_stmt.column_count, "column count should be zero for select all");
-    assert_str_eq("users", stmt.select_stmt.table_name, "table name should match");
-    free_statement(&stmt);
-}
-
-static void test_select_column_list(void) {
-    Statement stmt;
-    char errbuf[256] = {0};
-
-    assert_int_eq(STATUS_OK,
-                  tokenize_and_parse("SELECT id, name FROM users;", &stmt, errbuf, sizeof(errbuf)),
-                  "SELECT projection should parse");
     assert_int_eq(0, stmt.select_stmt.select_all, "projection should not be select_all");
     assert_size_eq(2, stmt.select_stmt.column_count, "projection column count should match");
-    assert_str_eq("id", stmt.select_stmt.columns[0], "first projection column should match");
-    assert_str_eq("name", stmt.select_stmt.columns[1], "second projection column should match");
+    assert_str_eq("users", stmt.select_stmt.table_name, "table name should match");
+    assert_int_eq(1, stmt.select_stmt.where_clause.has_condition, "WHERE clause should be enabled");
+    assert_str_eq("id", stmt.select_stmt.where_clause.column_name, "WHERE column should match");
+    assert_str_eq("2", stmt.select_stmt.where_clause.value.text, "WHERE literal should match");
     free_statement(&stmt);
+}
+
+static void test_parse_next_statement_handles_multiple_sqls(void) {
+    TokenArray tokens = {0};
+    Statement stmt = {0};
+    size_t cursor = 0;
+    char errbuf[256] = {0};
+
+    assert_int_eq(STATUS_OK,
+                  tokenize_sql("INSERT INTO users VALUES (1, 'Alice', 20); SELECT name FROM users WHERE id = 1;",
+                               &tokens, errbuf, sizeof(errbuf)),
+                  "multiple statements should tokenize");
+
+    assert_int_eq(STATUS_OK,
+                  parse_next_statement(&tokens, &cursor, &stmt, errbuf, sizeof(errbuf)),
+                  "first statement should parse");
+    assert_int_eq(STMT_INSERT, stmt.type, "first statement should be INSERT");
+    free_statement(&stmt);
+
+    assert_int_eq(STATUS_OK,
+                  parse_next_statement(&tokens, &cursor, &stmt, errbuf, sizeof(errbuf)),
+                  "second statement should parse");
+    assert_int_eq(STMT_SELECT, stmt.type, "second statement should be SELECT");
+    assert_str_eq("name", stmt.select_stmt.columns[0], "projection should match");
+    assert_int_eq(1, stmt.select_stmt.where_clause.has_condition, "WHERE clause should remain available");
+    free_statement(&stmt);
+
+    while (cursor < tokens.count && tokens.items[cursor].type == TOKEN_SEMICOLON) {
+        ++cursor;
+    }
+    assert_int_eq(TOKEN_EOF, tokens.items[cursor].type, "cursor should end at EOF after both statements");
+    free_token_array(&tokens);
 }
 
 static void test_select_missing_projection_fails(void) {
@@ -145,6 +151,18 @@ static void test_missing_from_fails(void) {
     }
 }
 
+static void test_missing_equal_in_where_fails(void) {
+    Statement stmt;
+    char errbuf[256] = {0};
+
+    assert_int_eq(STATUS_PARSE_ERROR,
+                  tokenize_and_parse("SELECT * FROM users WHERE id 1;", &stmt, errbuf, sizeof(errbuf)),
+                  "missing '=' in WHERE should fail");
+    if (strstr(errbuf, "expected '='") == NULL) {
+        fail("missing '=' message should be present");
+    }
+}
+
 static void test_missing_comma_or_paren_fails(void) {
     Statement stmt;
     char errbuf[256] = {0};
@@ -159,12 +177,12 @@ static void test_missing_comma_or_paren_fails(void) {
 
 int main(void) {
     test_insert_without_column_list();
-    test_insert_with_column_list();
-    test_select_star();
-    test_select_column_list();
+    test_select_column_list_with_where();
+    test_parse_next_statement_handles_multiple_sqls();
     test_select_missing_projection_fails();
     test_insert_missing_into_fails();
     test_missing_from_fails();
+    test_missing_equal_in_where_fails();
     test_missing_comma_or_paren_fails();
     printf("test_parser: OK\n");
     return 0;

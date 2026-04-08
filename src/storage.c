@@ -18,6 +18,24 @@ static void set_error(char *errbuf, size_t errbuf_size, const char *fmt, ...) {
     va_end(args);
 }
 
+static char *dup_string(const char *value) {
+    size_t length;
+    char *copy;
+
+    if (value == NULL) {
+        value = "";
+    }
+
+    length = strlen(value);
+    copy = (char *)malloc(length + 1U);
+    if (copy == NULL) {
+        return NULL;
+    }
+
+    memcpy(copy, value, length + 1U);
+    return copy;
+}
+
 static char *build_table_path(const char *db_dir, const char *table_name, const char *suffix) {
     size_t db_len;
     size_t table_len;
@@ -148,6 +166,55 @@ static void free_field_array(char **fields, size_t field_count) {
         free(fields[i]);
     }
     free(fields);
+}
+
+static int normalize_field_count(char ***fields, size_t *field_count, size_t expected_count) {
+    size_t current_count;
+    size_t i;
+
+    if (fields == NULL || field_count == NULL) {
+        return 1;
+    }
+
+    current_count = *field_count;
+    if (current_count == expected_count) {
+        return 0;
+    }
+
+    if (current_count > expected_count) {
+        for (i = expected_count; i < current_count; ++i) {
+            free((*fields)[i]);
+        }
+
+        if (expected_count == 0U) {
+            free(*fields);
+            *fields = NULL;
+        }
+
+        *field_count = expected_count;
+        return 0;
+    }
+
+    if (expected_count > 0U) {
+        char **grown = (char **)realloc(*fields, expected_count * sizeof(char *));
+        if (grown == NULL) {
+            return 1;
+        }
+        *fields = grown;
+    }
+
+    for (i = current_count; i < expected_count; ++i) {
+        (*fields)[i] = dup_string("");
+        if ((*fields)[i] == NULL) {
+            free_field_array(*fields, i);
+            *fields = NULL;
+            *field_count = 0U;
+            return 1;
+        }
+    }
+
+    *field_count = expected_count;
+    return 0;
 }
 
 static char *escape_field(const char *value) {
@@ -512,11 +579,10 @@ int read_all_rows_from_table(const char *db_dir, const char *table_name,
                 break;
             }
 
-            if (field_count != expected_column_count) {
+            if (normalize_field_count(&fields, &field_count, expected_column_count) != 0) {
                 set_error(errbuf, errbuf_size,
-                          "malformed row %zu in table '%s': expected %zu columns but found %zu",
-                          line_number, table_name, expected_column_count, field_count);
-                free_field_array(fields, field_count);
+                          "failed to align row %zu in table '%s' with current schema",
+                          line_number, table_name);
                 free(line);
                 status = 1;
                 break;
@@ -572,4 +638,3 @@ void free_rows(Row *rows, size_t row_count) {
 
     free(rows);
 }
-
